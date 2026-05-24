@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Rewrite pasted QA testcases into Robert-style and professional testcase formats."
+      content="Generate QA testcases from requirements using Robert-style and professional testcase formats."
     />
     <title>Testcase Style Studio</title>
     <link rel="stylesheet" href="src/styles.css" />
@@ -15,7 +15,7 @@
       <section class="workspace" aria-labelledby="app-title">
         <header class="topbar">
           <div>
-            <p class="eyebrow">QA testcase formatter</p>
+            <p class="eyebrow">QA testcase generator</p>
             <h1 id="app-title">Testcase Style Studio</h1>
           </div>
           <div class="topbar-actions">
@@ -23,7 +23,7 @@
               Sample
             </button>
             <button class="primary-button" id="generateButton" type="button">
-              Generate
+              Generate Testcases
             </button>
           </div>
         </header>
@@ -33,14 +33,14 @@
             <div class="panel-header">
               <div>
                 <h2 id="input-title">Input</h2>
-                <p>Paste existing testcases, rough scenarios, or Excel rows.</p>
+                <p>Paste the requirement, user story, ACs, or business rules.</p>
               </div>
               <span class="counter" id="inputCounter">0 lines</span>
             </div>
             <textarea
               id="inputText"
               spellcheck="true"
-              placeholder="Paste testcases here. Excel tab-separated rows are supported."
+              placeholder="Paste requirement here. Example: user story, acceptance criteria, permissions, UI behavior, validations, and expected outcomes."
             ></textarea>
           </section>
 
@@ -48,9 +48,15 @@
             <div class="panel-header">
               <div>
                 <h2>Settings</h2>
-                <p>Choose the writing style and coverage behavior.</p>
+                <p>Choose the input type, writing style, and coverage behavior.</p>
               </div>
             </div>
+
+            <label class="field-label" for="inputMode">Input type</label>
+            <select id="inputMode">
+              <option value="requirement">Requirement to testcases</option>
+              <option value="testcase">Rewrite existing testcases</option>
+            </select>
 
             <label class="field-label" for="styleSelect">Style</label>
             <select id="styleSelect">
@@ -78,7 +84,7 @@
                 <input id="addMissing" type="checkbox" checked />
                 <span>
                   <strong>Add missing coverage</strong>
-                  <small>Adds supported positive, negative, UI, and permission rows.</small>
+                  <small>Adds supported positive, negative, UI, permission, and edge rows.</small>
                 </span>
               </label>
               <label class="switch-row">
@@ -119,7 +125,7 @@
               </thead>
               <tbody id="resultBody">
                 <tr>
-                  <td colspan="8" class="empty-state">Paste content and generate to see rewritten testcases.</td>
+                  <td colspan="8" class="empty-state">Paste a requirement and generate to see testcases.</td>
                 </tr>
               </tbody>
             </table>
@@ -129,8 +135,8 @@
         <section class="panel summary-panel" aria-labelledby="summary-title">
           <div class="panel-header">
             <div>
-              <h2 id="summary-title">Change Summary</h2>
-              <p>Audit trail for what was rewritten, added, or removed.</p>
+              <h2 id="summary-title">Generation Summary</h2>
+              <p>Audit trail for what was generated, added, or guarded.</p>
             </div>
           </div>
           <ul id="summaryList" class="summary-list">

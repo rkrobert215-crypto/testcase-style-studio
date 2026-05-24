@@ -1,0 +1,13 @@
+User Story: SP-13539
+Module: Inventory Tree View
+
+Requirement:
+As an authorized PXW inventory user, I need to use Quick Move from the inventory tree so that inventory can be moved to another valid location without opening a separate details page.
+
+Acceptance Criteria:
+1. User with CAN_MOVE_PXW_INVENTORY can view Quick Move from eligible department, location, group, or device overflow menus.
+2. User without CAN_MOVE_PXW_INVENTORY cannot view or execute Quick Move.
+3. Quick Move opens a modal with selected source context, destination tree, search, Move, and Cancel controls.
+4. User can search and select a valid destination location.
+5. Move is blocked when the destination is invalid, same as source, or not eligible.
+6. Successful move refreshes the tree and shows the inventory under the new destination.

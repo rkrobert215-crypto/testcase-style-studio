@@ -1,15 +1,16 @@
 # Testcase Style Studio
 
-A standalone browser app for rewriting pasted QA testcases into a selected style, including Robert-style output.
+A standalone browser app for generating QA testcases from requirements in a selected style, including Robert-style output.
 
 ## What It Does
 
-- Accepts pasted rough testcases, scenarios, or Excel tab-separated rows.
-- Rewrites output into the standard testcase columns:
+- Accepts pasted requirements, user stories, acceptance criteria, permissions, and business rules.
+- Generates output into the standard testcase columns:
   `TC ID`, `USER STORY ID`, `MODULE`, `Scenario`, `Test Case`, `Expected Result`, `Type`, `Status`.
 - Supports Robert, Professional Standard, Yuv Broad Coverage, and Compact Review styles.
-- Adds supported missing coverage such as positive, negative, UI, permission, quick move, add child, and delete scenarios.
-- Provides a change summary showing rewritten, added, duplicate-removed, and final row counts.
+- Adds supported coverage such as positive, negative, UI, permission, functional, quick move, add child, and delete scenarios.
+- Still includes an optional mode to rewrite existing testcase rows.
+- Provides a generation summary showing requirement points, added coverage, duplicate removal, and final row counts.
 - Exports CSV and copies TSV for Excel.
 
 ## Run Locally
@@ -39,4 +40,4 @@ After pushing to GitHub:
 
 ## Notes
 
-This app is intentionally browser-only. It does not send testcase data to any server and does not require an API key.
+This app is intentionally browser-only. It does not send requirement or testcase data to any server and does not require an API key.

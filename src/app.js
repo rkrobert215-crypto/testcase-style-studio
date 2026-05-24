@@ -10,15 +10,26 @@
     "Status",
   ];
 
-  const SAMPLE_INPUT = [
-    "SP-13539\tInventory Tree View\tQuick Move option visibility\tVerify user can see Quick Move from eligible device overflow menu\tQuick Move option should be visible for user with CAN_MOVE_PXW_INVENTORY\tPositive\tReady",
-    "SP-13540\tLocation Management\tAdd child location\tAdd child location should open from parent location action menu\tAdd Child popup should open with selected parent location\tPositive\tReady",
-    "SP-13543\tLocation Management\tDelete empty location\tDelete action should be blocked when location has child locations\tSystem should not allow delete and should display proper validation\tNegative\tReady",
+  const SAMPLE_REQUIREMENT = [
+    "User Story: SP-13539",
+    "Module: Inventory Tree View",
+    "",
+    "Requirement:",
+    "As an authorized PXW inventory user, I need to use Quick Move from the inventory tree so that inventory can be moved to another valid location without opening a separate details page.",
+    "",
+    "Acceptance Criteria:",
+    "1. User with CAN_MOVE_PXW_INVENTORY can view Quick Move from eligible department, location, group, or device overflow menus.",
+    "2. User without CAN_MOVE_PXW_INVENTORY cannot view or execute Quick Move.",
+    "3. Quick Move opens a modal with selected source context, destination tree, search, Move, and Cancel controls.",
+    "4. User can search and select a valid destination location.",
+    "5. Move is blocked when the destination is invalid, same as source, or not eligible.",
+    "6. Successful move refreshes the tree and shows the inventory under the new destination.",
   ].join("\n");
 
   const elements = {
     inputText: document.getElementById("inputText"),
     inputCounter: document.getElementById("inputCounter"),
+    inputMode: document.getElementById("inputMode"),
     styleSelect: document.getElementById("styleSelect"),
     storyId: document.getElementById("storyId"),
     moduleName: document.getElementById("moduleName"),
@@ -37,23 +48,34 @@
   let currentRows = [];
 
   elements.inputText.addEventListener("input", updateCounter);
+  elements.inputMode.addEventListener("change", updateInputModeCopy);
   elements.generateButton.addEventListener("click", generate);
   elements.sampleButton.addEventListener("click", loadSample);
   elements.copyButton.addEventListener("click", copyTsv);
   elements.downloadButton.addEventListener("click", downloadCsv);
 
   updateCounter();
+  updateInputModeCopy();
 
   function updateCounter() {
     const lines = getLines(elements.inputText.value).length;
     elements.inputCounter.textContent = `${lines} ${lines === 1 ? "line" : "lines"}`;
   }
 
+  function updateInputModeCopy() {
+    const requirementMode = elements.inputMode.value === "requirement";
+    elements.inputText.placeholder = requirementMode
+      ? "Paste requirement here. Include user story, ACs, permissions, UI behavior, validations, and expected outcomes."
+      : "Paste existing testcases here. Excel tab-separated rows are supported.";
+  }
+
   function loadSample() {
-    elements.inputText.value = SAMPLE_INPUT;
+    elements.inputMode.value = "requirement";
+    elements.inputText.value = SAMPLE_REQUIREMENT;
     elements.storyId.value = "SP-13539";
     elements.moduleName.value = "Inventory Tree View";
     updateCounter();
+    updateInputModeCopy();
     generate();
   }
 
@@ -62,28 +84,26 @@
     if (!input) {
       currentRows = [];
       renderRows([]);
-      renderSummary(["No input provided. Paste testcases or rough scenarios before generating."]);
+      renderSummary(["No requirement provided. Paste the requirement or acceptance criteria before generating."]);
       return;
     }
 
     const options = getOptions();
-    const parsed = parseInput(input, options);
-    const normalized = parsed.map((row, index) => normalizeRow(row, index, options));
-    const coverageRows = options.addMissing ? buildMissingCoverage(normalized, input, options) : [];
-    const combined = normalized.concat(coverageRows);
-    const finalRows = options.dedupeRows ? dedupe(combined) : combined;
+    const result =
+      options.inputMode === "requirement"
+        ? generateFromRequirement(input, options)
+        : rewriteExistingTestcases(input, options);
 
-    currentRows = finalRows.map((row, index) => ({
-      ...row,
-      id: formatId(index + 1),
-    }));
+    const rows = options.dedupeRows ? dedupe(result.rows) : result.rows;
+    currentRows = rows.map((row, index) => ({ ...row, id: formatId(index + 1) }));
 
     renderRows(currentRows);
-    renderSummary(buildSummary(parsed, normalized, coverageRows, finalRows, options));
+    renderSummary(buildSummary(result, currentRows, options));
   }
 
   function getOptions() {
     return {
+      inputMode: elements.inputMode.value,
       style: elements.styleSelect.value,
       storyId: elements.storyId.value.trim(),
       moduleName: elements.moduleName.value.trim(),
@@ -93,29 +113,328 @@
     };
   }
 
-  function getLines(value) {
-    return value
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-  }
-
-  function parseInput(input, options) {
-    const lines = getLines(input);
+  function generateFromRequirement(input, options) {
+    const analysis = analyzeRequirement(input, options);
     const rows = [];
-    const headerMap = detectHeader(lines[0]);
-    const dataLines = headerMap ? lines.slice(1) : lines;
 
-    dataLines.forEach((line) => {
-      const cells = splitRow(line);
-      if (cells.length >= 4) {
-        rows.push(parseStructuredRow(cells, headerMap, options));
-      } else {
-        rows.push(parseFreeTextLine(line, options));
+    analysis.points.forEach((point, index) => {
+      const scenario = scenarioFromPoint(point.text, index);
+      const primaryType = shouldAddNegative(point.text) ? "Negative" : "Positive";
+      const action = primaryType === "Negative" ? negativeActionFromPoint(point.text) : actionFromPoint(point.text);
+      const module = moduleFromPoint(point.text, analysis.module);
+      const sourceRef = point.id;
+
+      rows.push(
+        buildRow({
+          storyId: analysis.storyId,
+          module,
+          scenario: primaryType === "Negative" ? `${scenario} - restricted behavior` : scenario,
+          action,
+          expected: expectedFromPoint(point.text, primaryType),
+          type: primaryType,
+          style: options.style,
+          sourceRef,
+        })
+      );
+
+      if (primaryType !== "Negative" && shouldAddNegative(point.text)) {
+        rows.push(
+          buildRow({
+            storyId: analysis.storyId,
+            module,
+            scenario: `${scenario} - restricted behavior`,
+            action: negativeActionFromPoint(point.text),
+            expected: expectedFromPoint(point.text, "Negative"),
+            type: "Negative",
+            style: options.style,
+            sourceRef,
+          })
+        );
+      }
+
+      if (hasPermissionSignal(point.text)) {
+        rows.push(
+          buildRow({
+            storyId: analysis.storyId,
+            module,
+            scenario: "Permission based behavior",
+            action: permissionActionFromPoint(point.text),
+            expected: "The action is available only for users with the required permission and blocked for unauthorized users.",
+            type: "Permission",
+            style: options.style,
+            sourceRef,
+          })
+        );
+      }
+
+      if (hasUiSignal(point.text)) {
+        rows.push(
+          buildRow({
+            storyId: analysis.storyId,
+            module,
+            scenario: "UI visibility and state",
+            action: uiActionFromPoint(point.text),
+            expected: "The stated labels, controls, modal content, and enabled or disabled states are displayed correctly.",
+            type: "UI",
+            style: options.style,
+            sourceRef,
+          })
+        );
       }
     });
 
+    const addedRows = options.addMissing ? buildRequirementCoverage(analysis, input, options) : [];
+    return {
+      mode: "requirement",
+      analysis,
+      rows: rows.concat(addedRows),
+      generatedCount: rows.length,
+      addedCount: addedRows.length,
+      addedRows,
+    };
+  }
+
+  function rewriteExistingTestcases(input, options) {
+    const parsed = parseExistingRows(input, options);
+    const rows = parsed.map((row, index) =>
+      buildRow({
+        storyId: row.storyId,
+        module: row.module,
+        scenario: row.scenario,
+        action: row.testCase,
+        expected: row.expectedResult,
+        type: row.type || inferType(row.testCase + " " + row.expectedResult),
+        style: options.style,
+        status: row.status,
+        sourceRef: `ROW-${String(index + 1).padStart(2, "0")}`,
+      })
+    );
+
+    return {
+      mode: "testcase",
+      analysis: {
+        storyId: options.storyId || "REQ-001",
+        module: options.moduleName || "QA Validation",
+        points: parsed.map((row, index) => ({ id: `ROW-${index + 1}`, text: row.testCase })),
+      },
+      rows,
+      generatedCount: rows.length,
+      addedCount: 0,
+      addedRows: [],
+    };
+  }
+
+  function analyzeRequirement(input, options) {
+    const storyId = options.storyId || extractStoryId(input) || "REQ-001";
+    const module = options.moduleName || extractNamedValue(input, "module") || inferModule(input) || "Requirement Validation";
+    const points = extractRequirementPoints(input);
+
+    return {
+      storyId,
+      module,
+      points: points.length > 0 ? points : [{ id: "REQ-01", text: summarizeRequirement(input) }],
+    };
+  }
+
+  function extractRequirementPoints(input) {
+    const lines = getLines(input);
+    const points = [];
+
+    lines.forEach((line) => {
+      const cleaned = cleanRequirementLine(line);
+      if (!cleaned || isHeadingOnly(cleaned)) return;
+
+      const acMatch = cleaned.match(/^(AC[-\s]?\d+|Acceptance Criteria\s*\d*|Scenario\s*\d*|Rule\s*\d*)[:.)-]\s*(.+)$/i);
+      const numberedMatch = cleaned.match(/^(\d+)[.)]\s+(.+)$/);
+      const bulletMatch = cleaned.match(/^[-*]\s+(.+)$/);
+
+      if (acMatch) {
+        points.push({ id: normalizePointId(acMatch[1], points.length + 1), text: acMatch[2].trim() });
+      } else if (numberedMatch) {
+        points.push({ id: `AC-${numberedMatch[1].padStart(2, "0")}`, text: numberedMatch[2].trim() });
+      } else if (bulletMatch) {
+        points.push({ id: `REQ-${String(points.length + 1).padStart(2, "0")}`, text: bulletMatch[1].trim() });
+      } else if (looksLikeRequirementPoint(cleaned)) {
+        points.push({ id: `REQ-${String(points.length + 1).padStart(2, "0")}`, text: cleaned });
+      }
+    });
+
+    if (points.length === 0) {
+      splitSentences(input).forEach((sentence, index) => {
+        if (looksLikeRequirementPoint(sentence)) {
+          points.push({ id: `REQ-${String(index + 1).padStart(2, "0")}`, text: sentence });
+        }
+      });
+    }
+
+    return points.slice(0, 40);
+  }
+
+  function buildRequirementCoverage(analysis, input, options) {
+    const text = input.toLowerCase();
+    const rows = [];
+    const add = (scenario, action, expected, type, moduleHint, sourceRef) => {
+      rows.push(
+        buildRow({
+          storyId: analysis.storyId,
+          module: moduleHint || analysis.module,
+          scenario,
+          action,
+          expected,
+          type,
+          style: options.style,
+          sourceRef,
+        })
+      );
+    };
+
+    if (!hasAnyType(analysis.points, ["cannot", "blocked", "invalid", "without", "unauthorized", "error", "fail"])) {
+      add(
+        "Negative condition handling",
+        "the stated action is blocked when the required condition is not satisfied",
+        "The system prevents the action and keeps existing data unchanged.",
+        "Negative",
+        analysis.module,
+        "NEG-01"
+      );
+    }
+
+    if (hasUiSignal(text)) {
+      add(
+        "UI state validation",
+        "the stated screen displays the correct controls, labels, messages, and action states",
+        "The UI matches the requirement and only supported controls are visible or enabled.",
+        "UI",
+        analysis.module,
+        "UI-01"
+      );
+    }
+
+    if (hasPermissionSignal(text)) {
+      add(
+        "Unauthorized access prevention",
+        "a user without the required permission cannot view or execute restricted actions",
+        "Restricted actions are hidden or blocked and no unauthorized update is performed.",
+        "Permission",
+        "Access Control",
+        "PERM-01"
+      );
+    }
+
+    if (containsAny(text, ["quick move", "quickmove"])) {
+      add(
+        "Quick Move source action",
+        "Quick Move can be opened from each eligible department, location, group, or device overflow menu",
+        "The Quick Move modal opens with the selected source context retained.",
+        "Positive",
+        "Inventory Tree View",
+        "QM-01"
+      );
+      add(
+        "Quick Move destination validation",
+        "Quick Move cannot be completed for same source, invalid, or ineligible destination selections",
+        "The move is blocked and the inventory remains under the original source.",
+        "Negative",
+        "Inventory Tree View",
+        "QM-02"
+      );
+      add(
+        "Quick Move completion reflection",
+        "inventory is reflected under the selected destination after a successful Quick Move",
+        "The tree refreshes and displays the inventory in the new valid location.",
+        "Functional",
+        "Inventory Tree View",
+        "QM-03"
+      );
+    }
+
+    if (containsAny(text, ["add child", "child location", "addchild"])) {
+      add(
+        "Add Child eligible parent",
+        "Add Child can be opened from an eligible parent department or location",
+        "The Add Child flow opens with the selected parent context.",
+        "Positive",
+        "Location Management",
+        "CHILD-01"
+      );
+      add(
+        "Add Child restricted parent",
+        "Add Child is blocked for an ineligible parent or unauthorized user",
+        "The action is hidden or blocked and no child location is created.",
+        "Negative",
+        "Location Management",
+        "CHILD-02"
+      );
+    }
+
+    if (containsAny(text, ["delete", "remove"])) {
+      add(
+        "Delete eligible record",
+        "the user can delete the record only when all delete conditions are satisfied",
+        "The record is removed from the list or tree and unrelated records remain unchanged.",
+        "Positive",
+        analysis.module,
+        "DEL-01"
+      );
+      add(
+        "Delete blocked record",
+        "the user cannot delete the record when child records, devices, inventory, or dependencies exist",
+        "The delete action is blocked and the original record remains available.",
+        "Negative",
+        analysis.module,
+        "DEL-02"
+      );
+    }
+
+    if (!options.strictMode && containsAny(text, ["form", "field", "save", "create", "edit"])) {
+      add(
+        "Required field validation",
+        "the user cannot save the form when mandatory fields are blank",
+        "The form remains open and displays validation for missing mandatory fields.",
+        "Negative",
+        analysis.module,
+        "FORM-01"
+      );
+    }
+
     return rows;
+  }
+
+  function buildRow({ storyId, module, scenario, action, expected, type, style, status = "Ready", sourceRef }) {
+    const normalizedType = normalizeType(type);
+    return {
+      id: "",
+      storyId,
+      module: module || inferModule(action) || "Requirement Validation",
+      scenario: styleScenario(scenario || inferScenario(action), style),
+      testCase: styleTestCase(action, normalizedType, style),
+      expectedResult: styleExpectedResult(expected, normalizedType, style),
+      type: normalizedType,
+      status,
+      sourceRef,
+    };
+  }
+
+  function parseExistingRows(input, options) {
+    const lines = getLines(input);
+    const headerMap = detectHeader(lines[0]);
+    const dataLines = headerMap ? lines.slice(1) : lines;
+
+    return dataLines.map((line) => {
+      const cells = splitRow(line);
+      if (cells.length >= 4) {
+        return parseStructuredRow(cells, headerMap, options);
+      }
+      return {
+        storyId: options.storyId || extractStoryId(line) || "REQ-001",
+        module: options.moduleName || inferModule(line) || "QA Validation",
+        scenario: inferScenario(line),
+        testCase: line,
+        expectedResult: "",
+        type: inferType(line),
+        status: "Ready",
+      };
+    });
   }
 
   function splitRow(line) {
@@ -129,6 +448,7 @@
   }
 
   function detectHeader(line) {
+    if (!line) return null;
     const cells = splitRow(line).map((cell) => normalizeKey(cell));
     const hasHeader =
       cells.includes("testcase") ||
@@ -147,8 +467,8 @@
   function parseStructuredRow(cells, headerMap, options) {
     if (headerMap) {
       return {
-        storyId: readByHeader(cells, headerMap, ["userstoryid", "storyid", "requirementid"]) || options.storyId,
-        module: readByHeader(cells, headerMap, ["module"]) || options.moduleName,
+        storyId: readByHeader(cells, headerMap, ["userstoryid", "storyid", "requirementid"]) || options.storyId || "REQ-001",
+        module: readByHeader(cells, headerMap, ["module"]) || options.moduleName || "QA Validation",
         scenario: readByHeader(cells, headerMap, ["scenario", "coveragearea"]) || "",
         testCase: readByHeader(cells, headerMap, ["testcase", "testcasename", "title"]) || "",
         expectedResult: readByHeader(cells, headerMap, ["expectedresult", "expected"]) || "",
@@ -158,26 +478,13 @@
     }
 
     return {
-      storyId: cells[0] || options.storyId,
-      module: cells[1] || options.moduleName,
+      storyId: cells[0] || options.storyId || "REQ-001",
+      module: cells[1] || options.moduleName || "QA Validation",
       scenario: cells[2] || "",
       testCase: cells[3] || cells[2] || "",
       expectedResult: cells[4] || "",
       type: cells[5] || "",
       status: cells[6] || "Ready",
-    };
-  }
-
-  function parseFreeTextLine(line, options) {
-    const cleaned = line.replace(/^[-*]\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
-    return {
-      storyId: options.storyId,
-      module: options.moduleName,
-      scenario: inferScenario(cleaned),
-      testCase: cleaned,
-      expectedResult: "",
-      type: "",
-      status: "Ready",
     };
   }
 
@@ -192,155 +499,124 @@
     return value.toLowerCase().replace(/[^a-z0-9]/g, "");
   }
 
-  function normalizeRow(row, index, options) {
-    const sourceText = [row.scenario, row.testCase, row.expectedResult].join(" ");
-    const type = normalizeType(row.type || inferType(sourceText));
-    const module = row.module || inferModule(sourceText) || options.moduleName || "QA Validation";
-    const scenario = styleScenario(row.scenario || inferScenario(sourceText), options.style);
-    const testCase = styleTestCase(row.testCase || row.scenario || sourceText, type, options.style);
-    const expectedResult = styleExpectedResult(row.expectedResult, testCase, type, options.style);
-
-    return {
-      id: formatId(index + 1),
-      storyId: row.storyId || options.storyId || "REQ-001",
-      module,
-      scenario,
-      testCase,
-      expectedResult,
-      type,
-      status: row.status || "Ready",
-      source: "rewritten",
-    };
+  function getLines(value) {
+    return value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
   }
 
-  function buildMissingCoverage(rows, input, options) {
-    const text = `${input} ${rows.map((row) => `${row.scenario} ${row.testCase}`).join(" ")}`.toLowerCase();
-    const additions = [];
-    const add = (scenario, testCase, expectedResult, type, moduleHint) => {
-      additions.push({
-        id: "",
-        storyId: options.storyId || rows[0]?.storyId || "REQ-001",
-        module: options.moduleName || moduleHint || rows[0]?.module || inferModule(testCase) || "QA Validation",
-        scenario: styleScenario(scenario, options.style),
-        testCase: styleTestCase(testCase, type, options.style),
-        expectedResult: styleExpectedResult(expectedResult, testCase, type, options.style),
-        type: normalizeType(type),
-        status: "Ready",
-        source: "added",
-      });
-    };
+  function cleanRequirementLine(line) {
+    return line
+      .replace(/\u2022/g, "-")
+      .replace(/^#+\s*/, "")
+      .replace(/^(Given|When|Then|And)\s+/i, "")
+      .trim();
+  }
 
-    const hasPositive = rows.some((row) => row.type === "Positive");
-    const hasNegative = rows.some((row) => row.type === "Negative");
-    const hasUi = rows.some((row) => row.type === "UI");
-    const hasPermission = rows.some((row) => row.type === "Permission");
+  function isHeadingOnly(line) {
+    return /^(requirement|acceptance criteria|business rules?|scope|notes?|description|user story|module)\s*:?\s*$/i.test(line);
+  }
 
-    if (!hasPositive) {
-      add(
-        "Primary successful flow",
-        "User can complete the main stated action successfully",
-        "The action is completed successfully and the correct result is displayed.",
-        "Positive"
-      );
+  function looksLikeRequirementPoint(line) {
+    if (line.length < 14) return false;
+    return /\b(can|cannot|should|shall|must|need|needs|display|show|hide|allow|prevent|block|open|create|update|delete|move|search|select|validate|refresh|save|cancel)\b/i.test(line);
+  }
+
+  function splitSentences(input) {
+    return input
+      .replace(/\r?\n/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean);
+  }
+
+  function summarizeRequirement(input) {
+    return splitSentences(input)[0] || input.slice(0, 220);
+  }
+
+  function normalizePointId(value, fallback) {
+    const digits = String(value).match(/\d+/)?.[0];
+    return digits ? `AC-${digits.padStart(2, "0")}` : `AC-${String(fallback).padStart(2, "0")}`;
+  }
+
+  function extractStoryId(input) {
+    return (
+      input.match(/\b[A-Z]{1,8}-\d{2,8}\b/)?.[0] ||
+      input.match(/\b(?:story|requirement|user story)\s*[:#-]\s*([A-Z0-9-]{3,})/i)?.[1] ||
+      ""
+    );
+  }
+
+  function extractNamedValue(input, label) {
+    const regex = new RegExp(`^\\s*${label}\\s*:\\s*(.+)$`, "im");
+    return input.match(regex)?.[1]?.trim() || "";
+  }
+
+  function scenarioFromPoint(point, index) {
+    if (containsAny(point.toLowerCase(), ["quick move", "quickmove"])) return "Quick Move behavior";
+    if (containsAny(point.toLowerCase(), ["add child", "child location"])) return "Add Child behavior";
+    if (containsAny(point.toLowerCase(), ["delete", "remove"])) return "Delete behavior";
+    if (hasPermissionSignal(point)) return "Permission behavior";
+    if (hasUiSignal(point)) return "UI behavior";
+    if (shouldAddNegative(point)) return "Validation and blocked behavior";
+    return `Requirement behavior ${String(index + 1).padStart(2, "0")}`;
+  }
+
+  function actionFromPoint(point) {
+    const text = stripRequirementPrefix(point);
+    const lower = text.toLowerCase();
+    if (lower.includes("cannot ")) return removeCannot(text);
+    if (lower.includes(" can ")) return text.replace(/^.*?\bcan\s+/i, "");
+    if (lower.includes(" should ")) return text.replace(/^.*?\bshould\s+/i, "");
+    if (lower.includes(" must ")) return text.replace(/^.*?\bmust\s+/i, "");
+    if (lower.includes(" shall ")) return text.replace(/^.*?\bshall\s+/i, "");
+    return text;
+  }
+
+  function negativeActionFromPoint(point) {
+    const action = actionFromPoint(point);
+    if (/^(be |is |are )/i.test(action)) return action;
+    return action.replace(/^not\s+/i, "");
+  }
+
+  function permissionActionFromPoint(point) {
+    const authority = point.match(/\bCAN_[A-Z0-9_]+\b/)?.[0] || "the required permission";
+    return `access the stated action only when assigned ${authority}`;
+  }
+
+  function uiActionFromPoint(point) {
+    if (containsAny(point.toLowerCase(), ["modal", "popup"])) return "view the correct modal content and available actions";
+    if (containsAny(point.toLowerCase(), ["button", "menu", "dropdown"])) return "view the correct action controls and states";
+    return "view the correct requirement-driven UI behavior";
+  }
+
+  function expectedFromPoint(point, type) {
+    const lower = point.toLowerCase();
+    if (type === "Negative") {
+      if (containsAny(lower, ["same", "invalid", "ineligible"])) {
+        return "The system blocks the action and keeps the original data unchanged.";
+      }
+      return "The system prevents the restricted or invalid action and displays the correct blocked state.";
     }
-
-    if (!hasNegative) {
-      add(
-        "Blocked or invalid flow",
-        "User cannot complete the stated action when required conditions are not met",
-        "The system prevents the action and displays the appropriate validation or blocked state.",
-        "Negative"
-      );
+    if (hasPermissionSignal(point)) {
+      return "Only users with the required permission can access or execute the stated behavior.";
     }
-
-    if (!hasUi && containsAny(text, ["popup", "modal", "button", "menu", "dropdown", "screen", "page", "visible", "display"])) {
-      add(
-        "UI visibility and labels",
-        "User can view the correct labels, controls, and action states for the stated screen",
-        "Only the expected UI controls are displayed with the correct enabled, disabled, visible, or hidden state.",
-        "UI"
-      );
+    if (hasUiSignal(point)) {
+      return "The stated UI element, modal, control, label, or message is displayed with the correct state.";
     }
-
-    if (
-      !hasPermission &&
-      containsAny(text, ["permission", "authority", "role", "unauthorized", "can_manage", "can_move", "access"])
-    ) {
-      add(
-        "Permission restricted access",
-        "User without the required permission cannot access or execute the restricted action",
-        "The restricted action is hidden or blocked, and no unauthorized update is performed.",
-        "Permission"
-      );
+    if (containsAny(lower, ["refresh", "updated", "display", "shown", "reflect"])) {
+      return "The updated information is displayed correctly in the relevant screen.";
     }
-
-    if (containsAny(text, ["quick move", "quickmove"])) {
-      add(
-        "Quick Move eligible source",
-        "User can open Quick Move from an eligible department, location, group, or device action menu",
-        "The Quick Move flow opens with the selected source context retained.",
-        "Positive",
-        "Inventory Tree View"
-      );
-      add(
-        "Quick Move restricted source",
-        "User cannot quick move inventory from an ineligible source or invalid target",
-        "The move action is unavailable or blocked, and inventory remains unchanged.",
-        "Negative",
-        "Inventory Tree View"
-      );
-    }
-
-    if (containsAny(text, ["add child", "child location", "addchild"])) {
-      add(
-        "Add Child location",
-        "User can add a child location from an eligible parent location",
-        "The Add Child flow opens with the selected parent location context.",
-        "Positive",
-        "Location Management"
-      );
-      add(
-        "Add Child restricted parent",
-        "User cannot add a child location from an ineligible parent location",
-        "The Add Child action is hidden or blocked for the ineligible parent.",
-        "Negative",
-        "Location Management"
-      );
-    }
-
-    if (containsAny(text, ["delete", "remove"])) {
-      add(
-        "Delete allowed record",
-        "User can delete the stated record only when all delete conditions are satisfied",
-        "The record is deleted and removed from the relevant list or tree without affecting unrelated records.",
-        "Positive"
-      );
-      add(
-        "Delete blocked record",
-        "User cannot delete the stated record when dependent child records or linked data exist",
-        "The system blocks deletion and keeps the original record unchanged.",
-        "Negative"
-      );
-    }
-
-    if (!options.strictMode && containsAny(text, ["form", "field", "save", "create", "edit"])) {
-      add(
-        "Required field validation",
-        "User cannot save the form when mandatory fields are blank",
-        "The form remains open and displays validation for each missing mandatory field.",
-        "Negative"
-      );
-    }
-
-    return additions;
+    return "The stated behavior is completed successfully and the expected result is displayed.";
   }
 
   function styleScenario(value, style) {
-    const clean = sentenceCase(value || "Functional validation");
-    if (style === "professional") return clean.replace(/\.$/, "");
-    if (style === "yuv") return clean.replace(/\.$/, "");
-    if (style === "compact") return clean.replace(/\.$/, "");
-    return clean.replace(/\.$/, "");
+    const clean = sentenceCase(value || "Functional validation").replace(/\.$/, "");
+    if (style === "professional") return clean;
+    if (style === "yuv") return clean;
+    if (style === "compact") return clean;
+    return clean;
   }
 
   function styleTestCase(value, type, style) {
@@ -349,31 +625,44 @@
 
     if (style === "professional") {
       if (type === "Negative") return `Verify that the system prevents the user from ${removeCannot(action)}`;
+      if (type === "Permission") return `Verify that the system enforces permission rules for ${removeCan(action)}`;
       return `Verify that the system allows the user to ${removeCan(action)}`;
     }
 
     if (style === "yuv") {
-      if (type === "UI") return `Verify that the page displays the correct UI state for ${action}`;
-      if (type === "Negative") return `Verify that the user is blocked when ${action}`;
+      if (type === "UI") return `Verify that the page displays the correct UI state for ${removeCan(action)}`;
+      if (type === "Negative") return `Verify that the user is blocked when trying to ${removeCannot(action)}`;
+      if (type === "Permission") return `Verify that permission-based access is handled correctly for ${removeCan(action)}`;
       return `Verify that the user can complete ${removeCan(action)}`;
     }
 
     if (style === "compact") {
-      if (type === "Negative") return `Verify blocked behavior for ${action}`;
-      return `Verify ${action}`;
+      if (type === "Negative") return `Verify blocked behavior for ${removeCannot(action)}`;
+      return `Verify ${removeCan(action)}`;
     }
 
     if (type === "Negative") return `Verify that the user cannot ${removeCannot(action)}`;
-    if (type === "Permission") return `Verify that the user has correct permission behavior for ${action}`;
-    if (type === "UI") return `Verify that the user can view the correct UI state for ${action}`;
+    if (type === "Permission") return `Verify that the user has correct permission behavior for ${removeCan(action)}`;
+    if (type === "UI") return `Verify that the user can view the correct UI state for ${removeCan(action)}`;
     return `Verify that the user can ${removeCan(action)}`;
   }
 
-  function styleExpectedResult(value, testCase, type, style) {
-    const clean = sentenceCase(value || inferExpected(testCase, type));
-    if (style === "compact") return clean.replace(/^The system should /, "");
-    if (style === "robert") return clean.replace(/^The system should /, "");
+  function styleExpectedResult(value, type, style) {
+    const clean = sentenceCase(value || inferExpected(type));
+    if (style === "compact" || style === "robert") {
+      return clean.replace(/^The system should /, "").replace(/^System should /, "");
+    }
     return clean;
+  }
+
+  function stripRequirementPrefix(value) {
+    return String(value || "")
+      .replace(/^(As an?|I want|So that)\b.*?,?\s*/i, "")
+      .replace(/^User\s+/i, "")
+      .replace(/^The user\s+/i, "")
+      .replace(/^System\s+/i, "")
+      .replace(/^The system\s+/i, "")
+      .trim();
   }
 
   function stripStarter(value) {
@@ -383,6 +672,7 @@
       .replace(/^Verify user can\s+/i, "")
       .replace(/^Verify user cannot\s+/i, "")
       .replace(/^Verify that the system allows the user to\s+/i, "")
+      .replace(/^Verify that the system prevents the user from\s+/i, "")
       .replace(/^Verify that\s+/i, "")
       .replace(/^User can\s+/i, "")
       .replace(/^User cannot\s+/i, "")
@@ -395,6 +685,7 @@
       .replace(/^user can\s+/i, "")
       .replace(/^can\s+/i, "")
       .replace(/^complete\s+complete\s+/i, "complete ")
+      .replace(/^to\s+/i, "")
       .trim();
   }
 
@@ -403,19 +694,14 @@
       .replace(/^user cannot\s+/i, "")
       .replace(/^cannot\s+/i, "")
       .replace(/^not\s+/i, "")
+      .replace(/^to\s+/i, "")
       .trim();
   }
 
-  function inferExpected(testCase, type) {
-    if (type === "Negative") {
-      return "The system should prevent the action and keep the existing data unchanged.";
-    }
-    if (type === "Permission") {
-      return "The system should allow only authorized behavior and prevent unauthorized updates.";
-    }
-    if (type === "UI") {
-      return "The expected controls, labels, messages, and states should be displayed correctly.";
-    }
+  function inferExpected(type) {
+    if (type === "Negative") return "The system should prevent the action and keep the existing data unchanged.";
+    if (type === "Permission") return "The system should allow only authorized behavior and prevent unauthorized updates.";
+    if (type === "UI") return "The expected controls, labels, messages, and states should be displayed correctly.";
     return "The system should complete the action successfully and display the correct result.";
   }
 
@@ -424,28 +710,30 @@
     if (containsAny(text, ["quick move", "quickmove"])) return "Quick Move action";
     if (containsAny(text, ["add child", "child location"])) return "Add Child location";
     if (containsAny(text, ["delete", "remove"])) return "Delete action";
-    if (containsAny(text, ["permission", "authority", "role"])) return "Permission behavior";
-    if (containsAny(text, ["popup", "modal", "visible", "display", "button", "menu"])) return "UI behavior";
-    if (containsAny(text, ["invalid", "error", "blank", "required", "blocked"])) return "Validation behavior";
+    if (hasPermissionSignal(text)) return "Permission behavior";
+    if (hasUiSignal(text)) return "UI behavior";
+    if (shouldAddNegative(text)) return "Validation behavior";
     return "Functional validation";
   }
 
   function inferModule(value) {
     const text = value.toLowerCase();
-    if (containsAny(text, ["quick move", "inventory", "device", "group"])) return "Inventory Tree View";
+    if (containsAny(text, ["quick move", "inventory", "device", "group", "tree"])) return "Inventory Tree View";
     if (containsAny(text, ["location", "department", "add child", "delete"])) return "Location Management";
-    if (containsAny(text, ["search", "filter", "list", "grid"])) return "List View";
-    if (containsAny(text, ["login", "permission", "role", "authority"])) return "Access Control";
+    if (containsAny(text, ["search", "filter", "list", "grid", "table"])) return "List View";
+    if (containsAny(text, ["login", "permission", "role", "authority", "unauthorized"])) return "Access Control";
     return "";
   }
 
+  function moduleFromPoint(point, fallback) {
+    return inferModule(point) || fallback || "Requirement Validation";
+  }
+
   function inferType(value) {
-    const text = value.toLowerCase();
-    if (containsAny(text, ["permission", "authority", "unauthorized", "without access", "role"])) return "Permission";
-    if (containsAny(text, ["cannot", "invalid", "blocked", "error", "failed", "missing", "blank", "ineligible"])) {
-      return "Negative";
-    }
-    if (containsAny(text, ["visible", "display", "button", "menu", "popup", "modal", "label", "ui"])) return "UI";
+    const text = String(value || "").toLowerCase();
+    if (hasPermissionSignal(text)) return "Permission";
+    if (shouldAddNegative(text)) return "Negative";
+    if (hasUiSignal(text)) return "UI";
     return "Positive";
   }
 
@@ -459,49 +747,110 @@
     return inferType(text);
   }
 
+  function shouldAddNegative(value) {
+    return containsAny(String(value).toLowerCase(), [
+      "cannot",
+      "should not",
+      "must not",
+      "shall not",
+      "blocked",
+      "invalid",
+      "ineligible",
+      "without",
+      "unauthorized",
+      "error",
+      "fail",
+      "missing",
+      "blank",
+      "same as",
+      "not eligible",
+      "no devices",
+      "has devices",
+      "has children",
+      "dependent",
+    ]);
+  }
+
+  function hasPermissionSignal(value) {
+    return /\bCAN_[A-Z0-9_]+\b/.test(String(value)) || containsAny(String(value).toLowerCase(), [
+      "permission",
+      "authority",
+      "role",
+      "unauthorized",
+      "access",
+      "with permission",
+      "without permission",
+    ]);
+  }
+
+  function hasUiSignal(value) {
+    return containsAny(String(value).toLowerCase(), [
+      "ui",
+      "visible",
+      "display",
+      "show",
+      "hide",
+      "button",
+      "menu",
+      "dropdown",
+      "modal",
+      "popup",
+      "screen",
+      "page",
+      "label",
+      "message",
+      "toast",
+      "enabled",
+      "disabled",
+      "tree",
+      "search",
+      "cancel",
+    ]);
+  }
+
+  function hasAnyType(points, terms) {
+    const text = points.map((point) => point.text).join(" ").toLowerCase();
+    return containsAny(text, terms);
+  }
+
   function dedupe(rows) {
     const seen = new Set();
     return rows.filter((row) => {
-      const key = `${row.module}|${row.scenario}|${row.testCase}`
-        .toLowerCase()
-        .replace(/[^a-z0-9|]/g, "");
+      const key = `${row.module}|${row.scenario}|${row.testCase}`.toLowerCase().replace(/[^a-z0-9|]/g, "");
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
   }
 
-  function buildSummary(parsed, normalized, added, finalRows, options) {
-    const removed = normalized.length + added.length - finalRows.length;
-    const addedTypes = added.reduce((acc, row) => {
-      acc[row.type] = (acc[row.type] || 0) + 1;
-      return acc;
-    }, {});
+  function buildSummary(result, finalRows, options) {
+    const duplicateCount = result.rows.length - finalRows.length;
+    const sourceCount = result.analysis.points.length;
+    const summary = [];
 
-    const summary = [
-      `Parsed ${parsed.length} input row(s) and rewrote ${normalized.length} row(s) into ${labelForStyle(options.style)} style.`,
-      "Standardized IDs, module naming, scenario wording, testcase titles, expected results, type, and status columns.",
-    ];
-
-    if (added.length > 0) {
+    if (result.mode === "requirement") {
       summary.push(
-        `Added ${added.length} supported missing coverage row(s): ${Object.entries(addedTypes)
-          .map(([type, count]) => `${count} ${type}`)
-          .join(", ")}.`
+        `Read ${sourceCount} requirement point(s) and generated ${finalRows.length} testcase row(s) in ${labelForStyle(options.style)} style.`
       );
+      summary.push(`Mapped output to story ${result.analysis.storyId} and module ${result.analysis.module}.`);
+      summary.push("Generated positive coverage for stated ACs and added supported negative, UI, permission, and functional rows where the requirement text supported them.");
     } else {
-      summary.push("No extra coverage rows were added.");
+      summary.push(`Rewrote ${finalRows.length} existing testcase row(s) in ${labelForStyle(options.style)} style.`);
+    }
+
+    if (result.addedCount > 0) {
+      summary.push(`Added ${result.addedCount} supported coverage row(s) from requirement signals.`);
     }
 
     if (options.strictMode) {
-      summary.push("Requirement-only guard was enabled, so unsupported generic scenario families were avoided.");
+      summary.push("Requirement-only guard was enabled, so unsupported random scenario families were avoided.");
     }
 
-    if (removed > 0) {
-      summary.push(`Removed ${removed} duplicate or near-duplicate row(s).`);
+    if (duplicateCount > 0) {
+      summary.push(`Removed ${duplicateCount} duplicate or near-duplicate row(s).`);
     }
 
-    summary.push(`Final output contains ${finalRows.length} testcase row(s).`);
+    summary.push("Output is ready to copy as TSV or export as CSV for Excel.");
     return summary;
   }
 
@@ -517,7 +866,7 @@
 
     if (rows.length === 0) {
       elements.resultBody.innerHTML =
-        '<tr><td colspan="8" class="empty-state">Paste content and generate to see rewritten testcases.</td></tr>';
+        '<tr><td colspan="8" class="empty-state">Paste a requirement and generate to see testcases.</td></tr>';
       elements.outputSubtitle.textContent = "No output yet.";
       return;
     }
@@ -525,26 +874,19 @@
     const fragment = document.createDocumentFragment();
     rows.forEach((row) => {
       const tr = document.createElement("tr");
-      [
-        row.id,
-        row.storyId,
-        row.module,
-        row.scenario,
-        row.testCase,
-        row.expectedResult,
-        row.type,
-        row.status,
-      ].forEach((value, index) => {
-        const td = document.createElement("td");
-        td.textContent = value;
-        if (index === 6) td.className = `type-${String(value).toLowerCase()}`;
-        tr.appendChild(td);
-      });
+      [row.id, row.storyId, row.module, row.scenario, row.testCase, row.expectedResult, row.type, row.status].forEach(
+        (value, index) => {
+          const td = document.createElement("td");
+          td.textContent = value;
+          if (index === 6) td.className = `type-${String(value).toLowerCase()}`;
+          tr.appendChild(td);
+        }
+      );
       fragment.appendChild(tr);
     });
 
     elements.resultBody.appendChild(fragment);
-    elements.outputSubtitle.textContent = `${rows.length} row(s) generated in ${labelForStyle(elements.styleSelect.value)} style.`;
+    elements.outputSubtitle.textContent = `${rows.length} testcase row(s) generated in ${labelForStyle(elements.styleSelect.value)} style.`;
   }
 
   function renderSummary(items) {
@@ -560,16 +902,9 @@
     return [COLUMNS.join("\t")]
       .concat(
         rows.map((row) =>
-          [
-            row.id,
-            row.storyId,
-            row.module,
-            row.scenario,
-            row.testCase,
-            row.expectedResult,
-            row.type,
-            row.status,
-          ].join("\t")
+          [row.id, row.storyId, row.module, row.scenario, row.testCase, row.expectedResult, row.type, row.status].join(
+            "\t"
+          )
         )
       )
       .join("\n");
@@ -579,16 +914,7 @@
     return [COLUMNS.map(csvEscape).join(",")]
       .concat(
         rows.map((row) =>
-          [
-            row.id,
-            row.storyId,
-            row.module,
-            row.scenario,
-            row.testCase,
-            row.expectedResult,
-            row.type,
-            row.status,
-          ]
+          [row.id, row.storyId, row.module, row.scenario, row.testCase, row.expectedResult, row.type, row.status]
             .map(csvEscape)
             .join(",")
         )
@@ -611,7 +937,7 @@
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "rewritten-testcases.csv";
+    link.download = "generated-testcases.csv";
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -625,13 +951,12 @@
   }
 
   function containsAny(value, terms) {
-    return terms.some((term) => value.includes(term));
+    const text = String(value || "").toLowerCase();
+    return terms.some((term) => text.includes(term));
   }
 
   function sentenceCase(value) {
-    const text = String(value || "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = String(value || "").replace(/\s+/g, " ").trim();
     if (!text) return "";
     return text.charAt(0).toUpperCase() + text.slice(1);
   }
