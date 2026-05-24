@@ -1,0 +1,3 @@
+SP-13539	Inventory Tree View	Quick Move option visibility	Verify user can see Quick Move from eligible device overflow menu	Quick Move option should be visible for user with CAN_MOVE_PXW_INVENTORY	Positive	Ready
+SP-13540	Location Management	Add child location	Add child location should open from parent location action menu	Add Child popup should open with selected parent location	Positive	Ready
+SP-13543	Location Management	Delete empty location	Delete action should be blocked when location has child locations	System should not allow delete and should display proper validation	Negative	Ready

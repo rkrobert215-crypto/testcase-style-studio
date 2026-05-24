@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Rewrite pasted QA testcases into Robert-style and professional testcase formats."
+    />
+    <title>Testcase Style Studio</title>
+    <link rel="stylesheet" href="src/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace" aria-labelledby="app-title">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">QA testcase formatter</p>
+            <h1 id="app-title">Testcase Style Studio</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="icon-button" id="sampleButton" type="button" title="Load sample">
+              Sample
+            </button>
+            <button class="primary-button" id="generateButton" type="button">
+              Generate
+            </button>
+          </div>
+        </header>
+
+        <div class="tool-grid">
+          <section class="panel input-panel" aria-labelledby="input-title">
+            <div class="panel-header">
+              <div>
+                <h2 id="input-title">Input</h2>
+                <p>Paste existing testcases, rough scenarios, or Excel rows.</p>
+              </div>
+              <span class="counter" id="inputCounter">0 lines</span>
+            </div>
+            <textarea
+              id="inputText"
+              spellcheck="true"
+              placeholder="Paste testcases here. Excel tab-separated rows are supported."
+            ></textarea>
+          </section>
+
+          <aside class="panel controls-panel" aria-label="Generation settings">
+            <div class="panel-header">
+              <div>
+                <h2>Settings</h2>
+                <p>Choose the writing style and coverage behavior.</p>
+              </div>
+            </div>
+
+            <label class="field-label" for="styleSelect">Style</label>
+            <select id="styleSelect">
+              <option value="robert">Robert</option>
+              <option value="professional">Professional Standard</option>
+              <option value="yuv">Yuv Broad Coverage</option>
+              <option value="compact">Compact Review</option>
+            </select>
+
+            <label class="field-label" for="storyId">User story ID</label>
+            <input id="storyId" type="text" placeholder="Example: SP-13539" />
+
+            <label class="field-label" for="moduleName">Module</label>
+            <input id="moduleName" type="text" placeholder="Auto-detect if blank" />
+
+            <div class="switch-list">
+              <label class="switch-row">
+                <input id="strictMode" type="checkbox" checked />
+                <span>
+                  <strong>Requirement-only guard</strong>
+                  <small>Prevents unsupported random scenario families.</small>
+                </span>
+              </label>
+              <label class="switch-row">
+                <input id="addMissing" type="checkbox" checked />
+                <span>
+                  <strong>Add missing coverage</strong>
+                  <small>Adds supported positive, negative, UI, and permission rows.</small>
+                </span>
+              </label>
+              <label class="switch-row">
+                <input id="dedupeRows" type="checkbox" checked />
+                <span>
+                  <strong>Remove duplicates</strong>
+                  <small>Merges repeated or near-identical testcase intent.</small>
+                </span>
+              </label>
+            </div>
+          </aside>
+        </div>
+
+        <section class="panel output-panel" aria-labelledby="output-title">
+          <div class="panel-header output-header">
+            <div>
+              <h2 id="output-title">Generated Testcases</h2>
+              <p id="outputSubtitle">No output yet.</p>
+            </div>
+            <div class="button-row">
+              <button class="secondary-button" id="copyButton" type="button">Copy TSV</button>
+              <button class="secondary-button" id="downloadButton" type="button">Export CSV</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>TC ID</th>
+                  <th>User Story ID</th>
+                  <th>Module</th>
+                  <th>Scenario</th>
+                  <th>Test Case</th>
+                  <th>Expected Result</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="resultBody">
+                <tr>
+                  <td colspan="8" class="empty-state">Paste content and generate to see rewritten testcases.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel summary-panel" aria-labelledby="summary-title">
+          <div class="panel-header">
+            <div>
+              <h2 id="summary-title">Change Summary</h2>
+              <p>Audit trail for what was rewritten, added, or removed.</p>
+            </div>
+          </div>
+          <ul id="summaryList" class="summary-list">
+            <li>No generation run yet.</li>
+          </ul>
+        </section>
+      </section>
+    </main>
+
+    <script src="src/app.js"></script>
+  </body>
+</html>
