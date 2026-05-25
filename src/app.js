@@ -1,4 +1,5 @@
 (function () {
+  const SETTINGS_KEY = "testcase-style-studio-settings";
   const COLUMNS = [
     "TC ID",
     "USER STORY ID",
@@ -26,11 +27,66 @@
     "6. Successful move refreshes the tree and shows the inventory under the new destination.",
   ].join("\n");
 
+  const AI_SCHEMA = {
+    type: "object",
+    additionalProperties: false,
+    required: ["testCases", "summary"],
+    properties: {
+      testCases: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "sourceReference",
+            "userStoryId",
+            "module",
+            "scenario",
+            "testCase",
+            "expectedResult",
+            "type",
+            "status",
+          ],
+          properties: {
+            sourceReference: { type: "string" },
+            userStoryId: { type: "string" },
+            module: { type: "string" },
+            scenario: { type: "string" },
+            testCase: { type: "string" },
+            expectedResult: { type: "string" },
+            type: {
+              type: "string",
+              enum: ["Positive", "Negative", "UI", "Functional", "Permission", "Edge"],
+            },
+            status: { type: "string" },
+          },
+        },
+      },
+      summary: {
+        type: "object",
+        additionalProperties: false,
+        required: ["requirementPointsCovered", "coverageAdded", "guardrailsApplied", "notes"],
+        properties: {
+          requirementPointsCovered: { type: "integer" },
+          coverageAdded: { type: "array", items: { type: "string" } },
+          guardrailsApplied: { type: "array", items: { type: "string" } },
+          notes: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+  };
+
   const elements = {
     inputText: document.getElementById("inputText"),
     inputCounter: document.getElementById("inputCounter"),
     inputMode: document.getElementById("inputMode"),
     styleSelect: document.getElementById("styleSelect"),
+    engineSelect: document.getElementById("engineSelect"),
+    apiKeyInput: document.getElementById("apiKeyInput"),
+    modelSelect: document.getElementById("modelSelect"),
+    rememberKey: document.getElementById("rememberKey"),
+    aiSettingsPanel: document.getElementById("aiSettingsPanel"),
     storyId: document.getElementById("storyId"),
     moduleName: document.getElementById("moduleName"),
     strictMode: document.getElementById("strictMode"),
@@ -42,13 +98,21 @@
     downloadButton: document.getElementById("downloadButton"),
     resultBody: document.getElementById("resultBody"),
     outputSubtitle: document.getElementById("outputSubtitle"),
+    statusBanner: document.getElementById("statusBanner"),
     summaryList: document.getElementById("summaryList"),
   };
 
   let currentRows = [];
+  let lastRunMeta = null;
 
+  restoreSettings();
   elements.inputText.addEventListener("input", updateCounter);
   elements.inputMode.addEventListener("change", updateInputModeCopy);
+  elements.engineSelect.addEventListener("change", persistSettings);
+  elements.styleSelect.addEventListener("change", persistSettings);
+  elements.modelSelect.addEventListener("change", persistSettings);
+  elements.rememberKey.addEventListener("change", persistSettings);
+  elements.apiKeyInput.addEventListener("change", persistSettings);
   elements.generateButton.addEventListener("click", generate);
   elements.sampleButton.addEventListener("click", loadSample);
   elements.copyButton.addEventListener("click", copyTsv);
@@ -56,6 +120,7 @@
 
   updateCounter();
   updateInputModeCopy();
+  updateEngineState();
 
   function updateCounter() {
     const lines = getLines(elements.inputText.value).length;
@@ -69,6 +134,38 @@
       : "Paste existing testcases here. Excel tab-separated rows are supported.";
   }
 
+  function updateEngineState() {
+    const aiEnabled = elements.engineSelect.value === "ai";
+    elements.aiSettingsPanel.style.display = aiEnabled ? "block" : "none";
+  }
+
+  function restoreSettings() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+      if (saved.inputMode) elements.inputMode.value = saved.inputMode;
+      if (saved.style) elements.styleSelect.value = saved.style;
+      if (saved.engine) elements.engineSelect.value = saved.engine;
+      if (saved.model) elements.modelSelect.value = saved.model;
+      if (saved.rememberKey) elements.rememberKey.checked = true;
+      if (saved.apiKey && saved.rememberKey) elements.apiKeyInput.value = saved.apiKey;
+    } catch {
+      localStorage.removeItem(SETTINGS_KEY);
+    }
+  }
+
+  function persistSettings() {
+    updateEngineState();
+    const settings = {
+      inputMode: elements.inputMode.value,
+      style: elements.styleSelect.value,
+      engine: elements.engineSelect.value,
+      model: elements.modelSelect.value,
+      rememberKey: elements.rememberKey.checked,
+      apiKey: elements.rememberKey.checked ? elements.apiKeyInput.value.trim() : "",
+    };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
   function loadSample() {
     elements.inputMode.value = "requirement";
     elements.inputText.value = SAMPLE_REQUIREMENT;
@@ -79,32 +176,95 @@
     generate();
   }
 
-  function generate() {
+  async function generate() {
     const input = elements.inputText.value.trim();
     if (!input) {
       currentRows = [];
+      lastRunMeta = null;
       renderRows([]);
+      setStatus("No requirement provided. Paste the requirement or acceptance criteria before generating.", "error");
       renderSummary(["No requirement provided. Paste the requirement or acceptance criteria before generating."]);
       return;
     }
 
     const options = getOptions();
-    const result =
-      options.inputMode === "requirement"
-        ? generateFromRequirement(input, options)
-        : rewriteExistingTestcases(input, options);
+    persistSettings();
+    setBusy(true);
+    setStatus(
+      options.engine === "ai"
+        ? "Generating with OpenAI. Reading requirement line by line..."
+        : "Generating locally from requirement rules...",
+      "working"
+    );
 
-    const rows = options.dedupeRows ? dedupe(result.rows) : result.rows;
-    currentRows = rows.map((row, index) => ({ ...row, id: formatId(index + 1) }));
+    try {
+      const result =
+        options.inputMode === "requirement"
+          ? await generateRequirementSuite(input, options)
+          : await generateRewriteSuite(input, options);
 
-    renderRows(currentRows);
-    renderSummary(buildSummary(result, currentRows, options));
+      const rows = options.dedupeRows ? dedupe(result.rows) : result.rows;
+      currentRows = rows.map((row, index) => ({ ...row, id: formatId(index + 1) }));
+      lastRunMeta = { ...result, finalCount: currentRows.length, duplicateCount: result.rows.length - rows.length };
+
+      renderRows(currentRows);
+      renderSummary(buildSummary(lastRunMeta, currentRows, options));
+      setStatus(
+        `${currentRows.length} testcase row(s) generated using ${result.engineLabel}.`,
+        result.engine === "ai" ? "success" : "working"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(error.message || "Generation failed.", "error");
+      renderSummary([error.message || "Generation failed."]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generateRequirementSuite(input, options) {
+    const analysis = analyzeRequirement(input, options);
+
+    if (options.engine === "ai" && options.apiKey) {
+      try {
+        const aiResult = await generateWithOpenAi(input, analysis, options);
+        return aiResult;
+      } catch (error) {
+        console.warn("[AI generation failed; using local fallback]", error);
+        const local = generateFromRequirementLocal(input, options, analysis);
+        local.summaryNotes.unshift(`OpenAI generation failed, so local fallback was used: ${error.message}`);
+        local.engineLabel = "Local fallback";
+        return local;
+      }
+    }
+
+    const local = generateFromRequirementLocal(input, options, analysis);
+    if (options.engine === "ai" && !options.apiKey) {
+      local.summaryNotes.unshift("OpenAI API key was not provided, so local fallback was used.");
+      local.engineLabel = "Local fallback";
+    }
+    return local;
+  }
+
+  async function generateRewriteSuite(input, options) {
+    if (options.engine === "ai" && options.apiKey) {
+      try {
+        const analysis = analyzeRequirement(input, options);
+        return await generateWithOpenAi(input, analysis, { ...options, inputMode: "testcase" });
+      } catch (error) {
+        console.warn("[AI rewrite failed; using local fallback]", error);
+      }
+    }
+    return rewriteExistingTestcasesLocal(input, options);
   }
 
   function getOptions() {
     return {
       inputMode: elements.inputMode.value,
       style: elements.styleSelect.value,
+      engine: elements.engineSelect.value,
+      apiKey: elements.apiKeyInput.value.trim(),
+      model: elements.modelSelect.value,
       storyId: elements.storyId.value.trim(),
       moduleName: elements.moduleName.value.trim(),
       strictMode: elements.strictMode.checked,
@@ -113,8 +273,225 @@
     };
   }
 
-  function generateFromRequirement(input, options) {
-    const analysis = analyzeRequirement(input, options);
+  async function generateWithOpenAi(input, analysis, options) {
+    const payload = {
+      model: options.model || "gpt-5.4-mini",
+      instructions: buildAiInstructions(options),
+      input: buildAiUserPrompt(input, analysis, options),
+      text: {
+        format: {
+          type: "json_schema",
+          name: "testcase_suite",
+          strict: true,
+          schema: AI_SCHEMA,
+        },
+      },
+      max_output_tokens: 12000,
+      store: false,
+    };
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = data?.error?.message || `OpenAI request failed with HTTP ${response.status}.`;
+      throw new Error(message);
+    }
+
+    const outputText = extractResponseText(data);
+    if (!outputText) {
+      throw new Error("OpenAI returned an empty response.");
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(outputText);
+    } catch {
+      throw new Error("OpenAI response was not valid JSON.");
+    }
+
+    const rows = normalizeAiRows(parsed.testCases || [], analysis, options);
+    if (rows.length === 0) {
+      throw new Error("OpenAI did not return any testcase rows.");
+    }
+
+    const guardedRows = applyStrictGuard(rows, input, options);
+    const completedRows = options.addMissing ? ensureCoreCoverage(guardedRows, analysis, input, options) : guardedRows;
+
+    return {
+      mode: options.inputMode,
+      engine: "ai",
+      engineLabel: `OpenAI ${options.model}`,
+      analysis,
+      rows: completedRows,
+      generatedCount: rows.length,
+      addedCount: Math.max(0, completedRows.length - guardedRows.length),
+      summaryNotes: [
+        `OpenAI returned ${rows.length} structured testcase row(s).`,
+        ...(parsed.summary?.coverageAdded || []),
+        ...(parsed.summary?.guardrailsApplied || []),
+        ...(parsed.summary?.notes || []),
+      ],
+    };
+  }
+
+  function buildAiInstructions(options) {
+    const styleLabel = labelForStyle(options.style);
+    return [
+      "You are a senior QA test designer creating enterprise manual testcases.",
+      `Write in ${styleLabel} style.`,
+      "Output must be structured JSON that matches the provided schema.",
+      "Read the full requirement line by line before generating.",
+      "Every testcase must map to explicit requirement wording, an AC point, a stated permission or role, a stated UI action/state, a stated validation or blocked path, or a directly stated user-visible side effect.",
+      "Do not invent unrelated features, roles, screens, settings, APIs, databases, browsers, responsive behavior, performance behavior, accessibility obligations, or security cases unless stated in the requirement.",
+      "Use these columns conceptually: TC ID, USER STORY ID, MODULE, Scenario, Test Case, Expected Result, Type, Status.",
+      "Do not include TC IDs in JSON; the app assigns IDs.",
+      "Use exact permission names, labels, popup/modal names, config keys, statuses, and fixed values from the requirement.",
+      "Include positive, negative, UI, functional, permission, and edge coverage when supported by the requirement.",
+      "Expected results must be direct, observable, and execution-ready.",
+      "Robert style means actor-based titles like 'Verify that the user can...' and crisp expected results.",
+      "Professional Standard style means formal, audit-ready, requirement-traceable wording.",
+      "Yuv Broad Coverage style means wider module/page/UI/navigation coverage, but still requirement-grounded.",
+      "Compact Review style means concise but not incomplete wording.",
+      options.strictMode
+        ? "Strict requirement-only guard is enabled: unsupported generic scenario families are not allowed."
+        : "Strict requirement-only guard is disabled: practical derived QA coverage may be added when it is clearly relevant.",
+    ].join("\n");
+  }
+
+  function buildAiUserPrompt(input, analysis, options) {
+    return [
+      `Input mode: ${options.inputMode === "requirement" ? "Generate testcases from requirement" : "Rewrite existing testcases"}`,
+      `Selected style: ${labelForStyle(options.style)}`,
+      `User story ID: ${analysis.storyId}`,
+      `Module: ${analysis.module}`,
+      "",
+      "Requirement points detected by the app:",
+      ...analysis.points.map((point) => `${point.id}: ${point.text}`),
+      "",
+      "Generate a complete professional testcase suite. Use exact terms from the requirement. Return JSON only.",
+      "",
+      "Input:",
+      input,
+    ].join("\n");
+  }
+
+  function extractResponseText(data) {
+    if (typeof data.output_text === "string") return data.output_text;
+    const pieces = [];
+    for (const output of data.output || []) {
+      if (output.type !== "message") continue;
+      for (const content of output.content || []) {
+        if (content.type === "output_text" && typeof content.text === "string") pieces.push(content.text);
+        if (content.type === "text" && typeof content.text === "string") pieces.push(content.text);
+      }
+    }
+    return pieces.join("\n").trim();
+  }
+
+  function normalizeAiRows(aiRows, analysis, options) {
+    return aiRows.map((item, index) =>
+      buildRow({
+        storyId: cleanText(item.userStoryId) || analysis.storyId,
+        module: cleanText(item.module) || analysis.module,
+        scenario: cleanText(item.scenario) || `Requirement behavior ${String(index + 1).padStart(2, "0")}`,
+        action: cleanText(item.testCase),
+        expected: cleanText(item.expectedResult),
+        type: normalizeType(item.type),
+        style: options.style,
+        status: cleanText(item.status) || "Ready",
+        sourceRef: cleanText(item.sourceReference) || `AI-${index + 1}`,
+        preserveTitle: true,
+      })
+    );
+  }
+
+  function applyStrictGuard(rows, input, options) {
+    if (!options.strictMode) return rows;
+    const lowerInput = input.toLowerCase();
+    const unsupportedTopics = [
+      ["cross-browser", "browser compatibility"],
+      ["responsive", "mobile layout", "tablet", "touch behavior"],
+      ["performance", "load time", "large data", "slow response"],
+      ["concurrency", "multi-user", "stale data"],
+      ["accessibility", "aria", "screen reader", "keyboard navigation"],
+      ["api response", "database", "db verification", "rollback"],
+    ];
+
+    return rows.filter((row) => {
+      const rowText = `${row.scenario} ${row.testCase} ${row.expectedResult}`.toLowerCase();
+      return !unsupportedTopics.some((topic) => {
+        const generated = topic.some((term) => rowText.includes(term));
+        const supported = topic.some((term) => lowerInput.includes(term));
+        return generated && !supported;
+      });
+    });
+  }
+
+  function ensureCoreCoverage(rows, analysis, input, options) {
+    const additions = [];
+    const text = input.toLowerCase();
+    const typeSet = new Set(rows.map((row) => row.type));
+    const add = (scenario, action, expected, type, moduleHint, sourceRef) => {
+      additions.push(
+        buildRow({
+          storyId: analysis.storyId,
+          module: moduleHint || analysis.module,
+          scenario,
+          action,
+          expected,
+          type,
+          style: options.style,
+          sourceRef,
+        })
+      );
+    };
+
+    if (!typeSet.has("Negative") && containsAny(text, ["cannot", "invalid", "blocked", "without", "not eligible"])) {
+      add(
+        "Negative condition handling",
+        "the stated action is blocked when the required condition is not satisfied",
+        "The system prevents the action and keeps existing data unchanged.",
+        "Negative",
+        analysis.module,
+        "AUTO-NEG"
+      );
+    }
+
+    if (!typeSet.has("Permission") && hasPermissionSignal(text)) {
+      add(
+        "Permission based behavior",
+        "a user without the required permission cannot access or execute restricted actions",
+        "Restricted actions are hidden or blocked and no unauthorized update is performed.",
+        "Permission",
+        "Access Control",
+        "AUTO-PERM"
+      );
+    }
+
+    if (!typeSet.has("UI") && hasUiSignal(text)) {
+      add(
+        "UI visibility and state",
+        "the stated screen displays the correct controls, labels, messages, and action states",
+        "The UI matches the requirement and only supported controls are visible or enabled.",
+        "UI",
+        analysis.module,
+        "AUTO-UI"
+      );
+    }
+
+    return rows.concat(additions);
+  }
+
+  function generateFromRequirementLocal(input, options, existingAnalysis) {
+    const analysis = existingAnalysis || analyzeRequirement(input, options);
     const rows = [];
 
     analysis.points.forEach((point, index) => {
@@ -136,21 +513,6 @@
           sourceRef,
         })
       );
-
-      if (primaryType !== "Negative" && shouldAddNegative(point.text)) {
-        rows.push(
-          buildRow({
-            storyId: analysis.storyId,
-            module,
-            scenario: `${scenario} - restricted behavior`,
-            action: negativeActionFromPoint(point.text),
-            expected: expectedFromPoint(point.text, "Negative"),
-            type: "Negative",
-            style: options.style,
-            sourceRef,
-          })
-        );
-      }
 
       if (hasPermissionSignal(point.text)) {
         rows.push(
@@ -186,15 +548,17 @@
     const addedRows = options.addMissing ? buildRequirementCoverage(analysis, input, options) : [];
     return {
       mode: "requirement",
+      engine: "rules",
+      engineLabel: "Local rule engine",
       analysis,
       rows: rows.concat(addedRows),
       generatedCount: rows.length,
       addedCount: addedRows.length,
-      addedRows,
+      summaryNotes: [],
     };
   }
 
-  function rewriteExistingTestcases(input, options) {
+  function rewriteExistingTestcasesLocal(input, options) {
     const parsed = parseExistingRows(input, options);
     const rows = parsed.map((row, index) =>
       buildRow({
@@ -212,6 +576,8 @@
 
     return {
       mode: "testcase",
+      engine: "rules",
+      engineLabel: "Local rule engine",
       analysis: {
         storyId: options.storyId || "REQ-001",
         module: options.moduleName || "QA Validation",
@@ -220,7 +586,7 @@
       rows,
       generatedCount: rows.length,
       addedCount: 0,
-      addedRows: [],
+      summaryNotes: [],
     };
   }
 
@@ -267,7 +633,7 @@
       });
     }
 
-    return points.slice(0, 40);
+    return points.slice(0, 50);
   }
 
   function buildRequirementCoverage(analysis, input, options) {
@@ -400,19 +766,38 @@
     return rows;
   }
 
-  function buildRow({ storyId, module, scenario, action, expected, type, style, status = "Ready", sourceRef }) {
+  function buildRow({
+    storyId,
+    module,
+    scenario,
+    action,
+    expected,
+    type,
+    style,
+    status = "Ready",
+    sourceRef,
+    preserveTitle = false,
+  }) {
     const normalizedType = normalizeType(type);
     return {
       id: "",
-      storyId,
-      module: module || inferModule(action) || "Requirement Validation",
+      storyId: cleanText(storyId) || "REQ-001",
+      module: cleanText(module) || inferModule(action) || "Requirement Validation",
       scenario: styleScenario(scenario || inferScenario(action), style),
-      testCase: styleTestCase(action, normalizedType, style),
+      testCase: preserveTitle
+        ? enforceStyleTitle(cleanText(action), normalizedType, style)
+        : styleTestCase(action, normalizedType, style),
       expectedResult: styleExpectedResult(expected, normalizedType, style),
       type: normalizedType,
-      status,
+      status: cleanText(status) || "Ready",
       sourceRef,
     };
+  }
+
+  function enforceStyleTitle(value, type, style) {
+    if (!value) return styleTestCase("complete the stated action", type, style);
+    if (/^Verify\b/i.test(value)) return value;
+    return styleTestCase(value, type, style);
   }
 
   function parseExistingRows(input, options) {
@@ -554,9 +939,10 @@
   }
 
   function scenarioFromPoint(point, index) {
-    if (containsAny(point.toLowerCase(), ["quick move", "quickmove"])) return "Quick Move behavior";
-    if (containsAny(point.toLowerCase(), ["add child", "child location"])) return "Add Child behavior";
-    if (containsAny(point.toLowerCase(), ["delete", "remove"])) return "Delete behavior";
+    const lower = point.toLowerCase();
+    if (containsAny(lower, ["quick move", "quickmove"])) return "Quick Move behavior";
+    if (containsAny(lower, ["add child", "child location"])) return "Add Child behavior";
+    if (containsAny(lower, ["delete", "remove"])) return "Delete behavior";
     if (hasPermissionSignal(point)) return "Permission behavior";
     if (hasUiSignal(point)) return "UI behavior";
     if (shouldAddNegative(point)) return "Validation and blocked behavior";
@@ -586,8 +972,9 @@
   }
 
   function uiActionFromPoint(point) {
-    if (containsAny(point.toLowerCase(), ["modal", "popup"])) return "view the correct modal content and available actions";
-    if (containsAny(point.toLowerCase(), ["button", "menu", "dropdown"])) return "view the correct action controls and states";
+    const lower = point.toLowerCase();
+    if (containsAny(lower, ["modal", "popup"])) return "view the correct modal content and available actions";
+    if (containsAny(lower, ["button", "menu", "dropdown"])) return "view the correct action controls and states";
     return "view the correct requirement-driven UI behavior";
   }
 
@@ -656,7 +1043,7 @@
   }
 
   function stripRequirementPrefix(value) {
-    return String(value || "")
+    return cleanText(value)
       .replace(/^(As an?|I want|So that)\b.*?,?\s*/i, "")
       .replace(/^User\s+/i, "")
       .replace(/^The user\s+/i, "")
@@ -681,7 +1068,7 @@
   }
 
   function removeCan(value) {
-    return value
+    return cleanText(value)
       .replace(/^user can\s+/i, "")
       .replace(/^can\s+/i, "")
       .replace(/^complete\s+complete\s+/i, "complete ")
@@ -690,7 +1077,7 @@
   }
 
   function removeCannot(value) {
-    return value
+    return cleanText(value)
       .replace(/^user cannot\s+/i, "")
       .replace(/^cannot\s+/i, "")
       .replace(/^not\s+/i, "")
@@ -706,7 +1093,7 @@
   }
 
   function inferScenario(value) {
-    const text = value.toLowerCase();
+    const text = cleanText(value).toLowerCase();
     if (containsAny(text, ["quick move", "quickmove"])) return "Quick Move action";
     if (containsAny(text, ["add child", "child location"])) return "Add Child location";
     if (containsAny(text, ["delete", "remove"])) return "Delete action";
@@ -717,7 +1104,7 @@
   }
 
   function inferModule(value) {
-    const text = value.toLowerCase();
+    const text = cleanText(value).toLowerCase();
     if (containsAny(text, ["quick move", "inventory", "device", "group", "tree"])) return "Inventory Tree View";
     if (containsAny(text, ["location", "department", "add child", "delete"])) return "Location Management";
     if (containsAny(text, ["search", "filter", "list", "grid", "table"])) return "List View";
@@ -730,7 +1117,7 @@
   }
 
   function inferType(value) {
-    const text = String(value || "").toLowerCase();
+    const text = cleanText(value).toLowerCase();
     if (hasPermissionSignal(text)) return "Permission";
     if (shouldAddNegative(text)) return "Negative";
     if (hasUiSignal(text)) return "UI";
@@ -738,9 +1125,10 @@
   }
 
   function normalizeType(value) {
-    const text = String(value || "").toLowerCase();
+    const text = cleanText(value).toLowerCase();
     if (text.includes("negative")) return "Negative";
     if (text.includes("permission")) return "Permission";
+    if (text.includes("edge")) return "Edge";
     if (text === "ui" || text.includes("ui")) return "UI";
     if (text.includes("functional")) return "Functional";
     if (text.includes("positive")) return "Positive";
@@ -748,7 +1136,7 @@
   }
 
   function shouldAddNegative(value) {
-    return containsAny(String(value).toLowerCase(), [
+    return containsAny(cleanText(value).toLowerCase(), [
       "cannot",
       "should not",
       "must not",
@@ -772,7 +1160,7 @@
   }
 
   function hasPermissionSignal(value) {
-    return /\bCAN_[A-Z0-9_]+\b/.test(String(value)) || containsAny(String(value).toLowerCase(), [
+    return /\bCAN_[A-Z0-9_]+\b/.test(String(value)) || containsAny(cleanText(value).toLowerCase(), [
       "permission",
       "authority",
       "role",
@@ -784,7 +1172,7 @@
   }
 
   function hasUiSignal(value) {
-    return containsAny(String(value).toLowerCase(), [
+    return containsAny(cleanText(value).toLowerCase(), [
       "ui",
       "visible",
       "display",
@@ -824,7 +1212,7 @@
   }
 
   function buildSummary(result, finalRows, options) {
-    const duplicateCount = result.rows.length - finalRows.length;
+    const duplicateCount = result.duplicateCount || result.rows.length - finalRows.length;
     const sourceCount = result.analysis.points.length;
     const summary = [];
 
@@ -832,14 +1220,20 @@
       summary.push(
         `Read ${sourceCount} requirement point(s) and generated ${finalRows.length} testcase row(s) in ${labelForStyle(options.style)} style.`
       );
+      summary.push(`Generation engine: ${result.engineLabel}.`);
       summary.push(`Mapped output to story ${result.analysis.storyId} and module ${result.analysis.module}.`);
-      summary.push("Generated positive coverage for stated ACs and added supported negative, UI, permission, and functional rows where the requirement text supported them.");
+      summary.push("Generated requirement-traceable positive, negative, UI, permission, functional, and edge rows where supported by the requirement.");
     } else {
       summary.push(`Rewrote ${finalRows.length} existing testcase row(s) in ${labelForStyle(options.style)} style.`);
+      summary.push(`Generation engine: ${result.engineLabel}.`);
     }
 
     if (result.addedCount > 0) {
       summary.push(`Added ${result.addedCount} supported coverage row(s) from requirement signals.`);
+    }
+
+    for (const note of result.summaryNotes || []) {
+      if (note) summary.push(note);
     }
 
     if (options.strictMode) {
@@ -898,6 +1292,19 @@
     });
   }
 
+  function setBusy(isBusy) {
+    elements.generateButton.disabled = isBusy;
+    elements.generateButton.textContent = isBusy ? "Generating..." : "Generate Testcases";
+  }
+
+  function setStatus(message, state) {
+    elements.statusBanner.textContent = message;
+    elements.statusBanner.className = "status-banner";
+    if (state === "working") elements.statusBanner.classList.add("is-working");
+    if (state === "error") elements.statusBanner.classList.add("is-error");
+    if (state === "success") elements.statusBanner.classList.add("is-success");
+  }
+
   function toTsv(rows) {
     return [COLUMNS.join("\t")]
       .concat(
@@ -951,14 +1358,18 @@
   }
 
   function containsAny(value, terms) {
-    const text = String(value || "").toLowerCase();
+    const text = cleanText(value).toLowerCase();
     return terms.some((term) => text.includes(term));
   }
 
   function sentenceCase(value) {
-    const text = String(value || "").replace(/\s+/g, " ").trim();
+    const text = cleanText(value);
     if (!text) return "";
     return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  function cleanText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
   }
 
   function formatId(number) {

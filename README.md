@@ -5,6 +5,8 @@ A standalone browser app for generating QA testcases from requirements in a sele
 ## What It Does
 
 - Accepts pasted requirements, user stories, acceptance criteria, permissions, and business rules.
+- Supports OpenAI AI generation directly from the browser using your own API key.
+- Keeps a local rule engine as a fallback when an API key is not provided or an API call fails.
 - Generates output into the standard testcase columns:
   `TC ID`, `USER STORY ID`, `MODULE`, `Scenario`, `Test Case`, `Expected Result`, `Type`, `Status`.
 - Supports Robert, Professional Standard, Yuv Broad Coverage, and Compact Review styles.
@@ -12,6 +14,14 @@ A standalone browser app for generating QA testcases from requirements in a sele
 - Still includes an optional mode to rewrite existing testcase rows.
 - Provides a generation summary showing requirement points, added coverage, duplicate removal, and final row counts.
 - Exports CSV and copies TSV for Excel.
+
+## AI Mode
+
+Select `OpenAI AI generation`, enter an OpenAI API key, and generate. The app uses the Responses API with structured JSON output so the result can be rendered directly into testcase rows.
+
+The API key is used only in your browser. If you enable `Remember key on this browser`, it is saved to local browser storage on that machine only. It is not committed to GitHub and there is no server-side storage in this app.
+
+If no API key is entered, the app automatically falls back to the local rule engine.
 
 ## Run Locally
 

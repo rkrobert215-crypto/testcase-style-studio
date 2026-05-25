@@ -199,7 +199,8 @@ textarea {
 }
 
 select,
-input[type="text"] {
+input[type="text"],
+input[type="password"] {
   width: calc(100% - 36px);
   height: 42px;
   margin: 0 18px;
@@ -223,6 +224,16 @@ textarea:focus {
   padding: 16px 18px 0;
 }
 
+.ai-settings {
+  margin-top: 10px;
+  padding: 0 0 4px;
+  border-top: 1px solid var(--border);
+}
+
+.compact-label {
+  margin-top: 12px;
+}
+
 .switch-row {
   display: grid;
   grid-template-columns: 18px 1fr;
@@ -237,6 +248,10 @@ textarea:focus {
 .switch-row input {
   margin-top: 3px;
   accent-color: var(--primary);
+}
+
+.inline-save {
+  margin: 12px 18px 0;
 }
 
 .switch-row strong,
@@ -256,6 +271,30 @@ textarea:focus {
 
 .output-header {
   align-items: center;
+}
+
+.status-banner {
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: #fbfcfd;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.status-banner.is-working {
+  color: var(--primary-strong);
+  background: #edf7f6;
+}
+
+.status-banner.is-error {
+  color: var(--danger);
+  background: #fff3f1;
+}
+
+.status-banner.is-success {
+  color: var(--primary-strong);
+  background: #f2f8f4;
 }
 
 .table-wrap {

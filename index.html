@@ -66,6 +66,31 @@
               <option value="compact">Compact Review</option>
             </select>
 
+            <label class="field-label" for="engineSelect">Generation engine</label>
+            <select id="engineSelect">
+              <option value="ai">OpenAI AI generation</option>
+              <option value="rules">Local rule engine</option>
+            </select>
+
+            <div class="ai-settings" id="aiSettingsPanel">
+              <label class="field-label compact-label" for="apiKeyInput">OpenAI API key</label>
+              <input id="apiKeyInput" type="password" placeholder="sk-..." autocomplete="off" />
+
+              <label class="field-label compact-label" for="modelSelect">Model</label>
+              <select id="modelSelect">
+                <option value="gpt-5.4-mini">GPT-5.4 mini</option>
+                <option value="gpt-5.4">GPT-5.4</option>
+              </select>
+
+              <label class="switch-row inline-save">
+                <input id="rememberKey" type="checkbox" />
+                <span>
+                  <strong>Remember key on this browser</strong>
+                  <small>Stored only in local browser storage, never in GitHub.</small>
+                </span>
+              </label>
+            </div>
+
             <label class="field-label" for="storyId">User story ID</label>
             <input id="storyId" type="text" placeholder="Example: SP-13539" />
 
@@ -109,6 +134,7 @@
               <button class="secondary-button" id="downloadButton" type="button">Export CSV</button>
             </div>
           </div>
+          <div class="status-banner" id="statusBanner">Ready. Paste a requirement and generate testcases.</div>
           <div class="table-wrap">
             <table>
               <thead>
